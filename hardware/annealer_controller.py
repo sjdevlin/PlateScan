@@ -1,0 +1,215 @@
+from tokenize import String
+from serial import Serial
+from serial.serialutil import SerialException
+from time import sleep
+from services import Logger, AppConfig
+
+class AnnealerController():
+
+    def __init__(self):
+        
+        #init does not need a serial number since only annealer can be conencted and 
+        #it just queries the one picked up on the port specified by the config file
+        #and then loads addresses and calibration based on the annealer's serial no.
+
+        self.logger = Logger() # Singleton instance
+        my_app_config = AppConfig()  # Singleton instance - may be opened multiple times from different classes
+
+        self.annealer_port = my_app_config.get("annealer_port")
+        self.annealer_baudrate = my_app_config.get("annealer_baudrate")
+        self.annealer_timeout = my_app_config.get("annealer_timeout")
+        self.annealer_serial_delay = my_app_config.get("annealer_serial_delay")
+        self.annealer_retries = my_app_config.get("annealer_retries")
+        self.annealer_heat = my_app_config.get("annealer_heat")
+        self.annealer_get_temp = my_app_config.get("annealer_get_temp")
+        self.annealer_get_address = my_app_config.get("annealer_get_address")
+        self.annealer_get_serial_number = my_app_config.get("annealer_get_serial_number")
+        self.annealer_set_serial_number = my_app_config.get("annealer_set_serial_number")
+        self.annealer_zero_all_wells = my_app_config.get("annealer_zero_all_wells")
+        self.celsius_multiplier = my_app_config.get("celsius_multiplier")
+
+    def connect(self):
+        try:
+            self.ser = Serial(self.annealer_port, self.annealer_baudrate, timeout=self.annealer_timeout)
+            if self.ser.is_open:
+                self.logger.info(f"Connected to plate.")
+                self.ser.reset_input_buffer() # Clear input buffer
+                return True
+            else:
+                return False
+        except SerialException as e:
+            self.logger.error(f"Error connecting to plate: {e}")
+            self.ser = None
+            return False
+
+    def disconnect(self):
+        """Close the serial port properly before closing the window."""
+        if getattr(self, "ser", None) and self.ser.is_open:
+            self.logger.info("Closing serial port")
+            try:
+                self.ser.close()
+            except SerialException as e:
+                self.logger.error(f"Error while closing serial port: {e}")
+        
+
+    def _send_command(self, command):
+        if not getattr(self, "ser", None):
+            raise SerialException("Serial connection not initialized")
+        self.ser.write((command + '\n').encode())
+
+    def _read_response(self):
+        if not getattr(self, "ser", None):
+            return None
+        try:
+            return self.ser.readline().decode(errors="replace").strip()
+        except SerialException as e:
+            self.logger.error(f"Serial read error: {e}")
+            return None
+
+    def get_serial_number(self):
+        retries = self.annealer_retries
+        while retries > 0:
+            self._send_command(self.annealer_get_serial_number)
+            sleep(self.annealer_serial_delay)
+            response = self._read_response()
+            if not response:
+                retries -= 1
+                self.logger.error("No response when requesting serial number")
+                continue
+            try:
+                response_int = int(response)  # Try converting to an integer
+                self.logger.info(f"Serial number returned: {response}")
+                self.ser.reset_input_buffer() # Clear input buffer
+                return response_int
+            except ValueError:
+                retries -= 1
+                self.ser.reset_input_buffer() # Clear input buffer
+                self.logger.error(f"Invalid response to request for serial number: {response}")
+        else:
+            self.logger.error(f"No response from plate from serial number request.")
+            return None
+
+    def set_serial_number(self, serial_number):
+        retries = self.annealer_retries
+        command = f"{self.annealer_set_serial_number} {serial_number}"
+        while retries > 0:
+            self._send_command(command)
+            sleep(self.annealer_serial_delay)
+            response = self._read_response()
+            if response is None:
+                retries -= 1
+                self.logger.error("No response from Plate to request to set Serial Number")
+                continue
+            if response == str(serial_number):
+                self.logger.info(f"Serial number {response} saved to Plate")
+                return True
+            retries -= 1
+            self.logger.error(f"Invalid response from Plate to request to set Serial Number: {response}")
+        else:
+            self.logger.error(f"No response from plate trying to set serial number {self.well_index}.")
+            return None
+
+
+    def get_sensors(self, num_wells):
+        retries = self.annealer_retries
+        addresses = []
+        while retries > 0:
+            self._send_command(self.annealer_get_address)
+            sleep(self.annealer_serial_delay)
+            response = self._read_response()
+            if not response:
+                retries -= 1
+                self.logger.warning("No response when requesting sensor addresses; retrying")
+                continue
+            addresses = response.split('*')
+            addresses = [addr.strip() for addr in addresses if addr.strip()]
+            if len(addresses) == num_wells:
+                self.addresses = addresses
+                self.logger.info(f"Addresses found for all wells")
+                break
+            retries -= 1
+        else:
+            self.logger.info(f"Failed to get all addresses.  Found {len(addresses)} out of {num_wells}.")
+            self.logger.error(f"Failed to get all addresses.  Found {len(addresses)} out of {num_wells}.")
+            return addresses
+
+    def get_temperature_celsius(self, sensor_address=None, calibration_factor=1.0):
+
+        try:
+            retries = self.annealer_retries
+
+            while retries > 0:
+                self._send_command(f"{self.annealer_get_temp} {sensor_address}")
+                sleep(self.annealer_serial_delay)
+                response = self._read_response()
+
+                if response is None:  # If read_response() times out or returns nothing
+                    self.logger.warning(f"Timeout from sensor {sensor_address}, retrying...")
+                    retries -= 1
+                    continue  # Retry
+
+                try:
+                    response_int = int(response)  # Try converting to an integer
+                    float_temperature = (float(response_int) + calibration_factor) * self.celsius_multiplier 
+    #                self.logger.info(f"Sensor {address} returned temperature: {float_temperture}")
+                    self.ser.reset_output_buffer() # Clear output buffer
+                    self.ser.reset_input_buffer() # Clear input buffer
+                    return float_temperature
+                except ValueError:
+                    retries -= 1
+                    self.ser.reset_input_buffer() # Clear input buffer
+                    self.ser.reset_output_buffer() # Clear output buffer
+                    self.logger.warning(f"Temperature Sensor Error from Plate: {response}")
+
+
+            else:
+                self.logger.error(f"Too many errors from sensor {sensor_address}.")
+                return None
+        except Exception as e:
+             self.logger.error(f"Error reading temperature: {e}")
+             return None
+        
+
+    def apply_heat(self, index=None, intensity=0):
+        try:
+            command = self.annealer_heat + " " + str(index) + " " + str(intensity)
+            retries = self.annealer_retries
+            while retries > 0:
+                self._send_command(command)
+                sleep(self.annealer_serial_delay)
+                response = self._read_response()
+                if response == command:
+                    #self.logger.info(f"Applied {intensity} heat to well with index {index}")
+                    self.ser.reset_input_buffer() # Clear input buffer
+                    self.ser.reset_output_buffer() # Clear output buffer
+                    return True
+                self.ser.reset_input_buffer() # Clear input buffer
+                self.ser.reset_output_buffer() # Clear output buffer
+                retries -= 1
+                self.logger.warning(f"Invalid Response from Annealer: {response}")
+            else:
+                self.logger.error(f"No response to heat command from well {index}.")
+                return None
+        except Exception as e:
+            self.logger.error(f"Exception calling apply heat: {e}")
+            return None
+
+
+    def zero_all_wells(self):
+        command = self.annealer_zero_all_wells
+        retries = self.annealer_retries
+        while retries > 0:
+            self._send_command(command)
+            sleep(self.annealer_serial_delay)
+            response = self._read_response()
+            if response == command:
+                self.logger.info(f"Switched off all wells")
+                self.ser.reset_input_buffer() # Clear input buffer
+                self.ser.reset_output_buffer() # Clear output buffer
+                return True
+            retries -= 1
+            self.logger.warning(f"Invalid Response from Annealer: {response}")
+        else:
+            self.logger.error(f"No response to zero command.")
+            return None
+
