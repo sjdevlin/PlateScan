@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Float, Integer, String
+from sqlalchemy import Boolean, Column, Float, Integer, String
 
 from .base import Base
 
@@ -12,6 +12,7 @@ class ImageSet(Base):
     number_of_sites = Column(Integer)
     stack_size = Column(Integer)
     stack_step_size = Column(Integer)
+    autofocus = Column(Boolean, default=False)
     channel_1_number = Column(Integer)
     channel_1_intensity = Column(Float)
     channel_2_number = Column(Integer)

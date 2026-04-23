@@ -22,6 +22,7 @@ class ImageSandboxPresenter:
         self.plate_lookup = {self._plate_option_label(plate): plate for plate in self.plates}
 
         self.current_plate = None
+        self.current_default_focus = None
         self.selected_well = None
         self.moved_to_well = None
 
@@ -61,12 +62,14 @@ class ImageSandboxPresenter:
             return
 
         self.current_plate = plate
+        self.current_default_focus = self._get_plate_default_focus(plate)
         self.selected_well = None
         self.moved_to_well = None
         self.view.set_move_enabled(False)
         self.view.set_image_enabled(False)
         self.view.selection_label.configure(text="No well selected")
 
+        self._apply_default_focus_for_plate()
         self.view.show_plate(self.current_plate, self.selected_well, self.on_well_clicked)
 
     def on_well_clicked(self, event):
@@ -103,6 +106,7 @@ class ImageSandboxPresenter:
         try:
             self.stage_controller.move(position=x, axis="x", speed="normal")
             self.stage_controller.move(position=y, axis="y", speed="normal")
+            self._apply_default_focus_for_plate()
         except Exception as exc:
             self.logger.error(f"Failed to move stage: {exc}")
             self.view.display_error(f"Failed to move stage: {exc}")
@@ -153,3 +157,25 @@ class ImageSandboxPresenter:
     @staticmethod
     def _led_number_to_bitmask(led_number):
         return hex(1 << int(led_number))
+
+    @staticmethod
+    def _get_plate_default_focus(plate):
+        if plate is None:
+            return None
+        if getattr(plate, "default_focus", None) is None:
+            return None
+        return float(plate.default_focus)
+
+    def _apply_default_focus_for_plate(self):
+        if self.current_default_focus is None:
+            return
+
+        try:
+            self.focus_controller.autofocus(False)
+            self.focus_controller.move_z(self.current_default_focus)
+            self.logger.info(
+                f"Applied default focus {self.current_default_focus:.2f} for plate {self.current_plate.id}"
+            )
+        except Exception as exc:
+            self.logger.error(f"Failed to apply default focus: {exc}")
+            self.view.display_error(f"Failed to apply default focus: {exc}")

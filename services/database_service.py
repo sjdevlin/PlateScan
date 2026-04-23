@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import joinedload, sessionmaker
 
 from models import Base, Image, ImageSet, Plate, ResultRun
@@ -67,7 +67,16 @@ class DatabaseService:
         self.engine = create_engine(db_url)
         self.Session = sessionmaker(bind=self.engine)
         Base.metadata.create_all(self.engine)
+        self._migrate_schema()
         self._seed_default_plates_if_needed()
+
+    def _migrate_schema(self):
+        inspector = inspect(self.engine)
+        image_set_columns = {column["name"] for column in inspector.get_columns("ImageSet")}
+
+        if "autofocus" not in image_set_columns:
+            with self.engine.begin() as connection:
+                connection.execute(text('ALTER TABLE "ImageSet" ADD COLUMN autofocus BOOLEAN DEFAULT 0'))
 
     def _seed_default_plates_if_needed(self):
         with self.Session() as session:

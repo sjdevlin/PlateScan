@@ -11,7 +11,6 @@ class ImageSetManagerPresenter:
     def __init__(self, view, db):
         self.view = view
         self.db = db
-
         self.view.bind_row_selection(self.on_row_selected)
         self.view.new_button.configure(command=self.create_image_set)
         self.view.edit_button.configure(command=self.edit_image_set)
@@ -32,6 +31,7 @@ class ImageSetManagerPresenter:
                     image_set.number_of_sites,
                     image_set.stack_size,
                     image_set.stack_step_size,
+                    "On" if bool(getattr(image_set, "autofocus", False)) else "Off",
                     "" if image_set.channel_1_number is None else str(image_set.channel_1_number),
                     "" if image_set.channel_2_number is None else str(image_set.channel_2_number),
                 )
@@ -70,6 +70,7 @@ class ImageSetManagerPresenter:
             number_of_sites=source.number_of_sites,
             stack_size=source.stack_size,
             stack_step_size=source.stack_step_size,
+            autofocus=bool(getattr(source, "autofocus", False)),
             channel_1_number=source.channel_1_number,
             channel_1_intensity=source.channel_1_intensity,
             channel_2_number=source.channel_2_number,
@@ -177,6 +178,7 @@ class ImageSetManagerPresenter:
             "number_of_sites": number_of_sites,
             "stack_size": stack_size,
             "stack_step_size": stack_step_size,
+            "autofocus": bool(values["autofocus"]),
             "channel_1_number": channel_1_number,
             "channel_1_intensity": channel_1_intensity,
             "channel_2_number": channel_2_number,
@@ -229,6 +231,7 @@ class ImageSetManagerPresenter:
                 "number_of_sites": "1",
                 "stack_size": "1",
                 "stack_step_size": "1",
+                "autofocus": False,
                 "channel_1_number": "",
                 "channel_1_intensity": "",
                 "channel_2_number": "",
@@ -241,6 +244,7 @@ class ImageSetManagerPresenter:
             "number_of_sites": "" if existing.number_of_sites is None else str(existing.number_of_sites),
             "stack_size": "" if existing.stack_size is None else str(existing.stack_size),
             "stack_step_size": "" if existing.stack_step_size is None else str(existing.stack_step_size),
+            "autofocus": bool(getattr(existing, "autofocus", False)),
             "channel_1_number": "" if existing.channel_1_number is None else str(existing.channel_1_number),
             "channel_1_intensity": "" if existing.channel_1_intensity is None else str(existing.channel_1_intensity),
             "channel_2_number": "" if existing.channel_2_number is None else str(existing.channel_2_number),

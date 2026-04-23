@@ -50,7 +50,7 @@ class ImagingRunLauncherView:
         image_set_label = customtkinter.CTkLabel(self.image_set_frame, text="Image Sets")
         image_set_label.grid(row=0, column=0, sticky="w", pady=(0, 8))
 
-        self.image_set_columns = ("id", "description", "wells", "sites", "stack", "step")
+        self.image_set_columns = ("id", "description", "wells", "sites", "stack", "step", "autofocus")
         self.image_set_table = ttk.Treeview(self.image_set_frame, columns=self.image_set_columns, show="headings")
         self.image_set_table.heading("id", text="ID")
         self.image_set_table.heading("description", text="Description")
@@ -58,13 +58,15 @@ class ImagingRunLauncherView:
         self.image_set_table.heading("sites", text="Sites")
         self.image_set_table.heading("stack", text="Stack Size")
         self.image_set_table.heading("step", text="Step")
+        self.image_set_table.heading("autofocus", text="Autofocus")
 
         self.image_set_table.column("id", width=60, anchor="w", stretch=False)
-        self.image_set_table.column("description", width=600, anchor="w")
+        self.image_set_table.column("description", width=520, anchor="w")
         self.image_set_table.column("wells", width=80, anchor="w", stretch=False)
         self.image_set_table.column("sites", width=80, anchor="w", stretch=False)
         self.image_set_table.column("stack", width=100, anchor="w", stretch=False)
         self.image_set_table.column("step", width=100, anchor="w", stretch=False)
+        self.image_set_table.column("autofocus", width=100, anchor="w", stretch=False)
         self.image_set_table.grid(row=1, column=0, sticky="nsew")
 
         self.plate_frame = customtkinter.CTkFrame(self.home_frame, fg_color="transparent")

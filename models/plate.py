@@ -23,3 +23,4 @@ class Plate(Base):
     well_spacing_y = Column(Float)
     min_well_volume = Column(Float)
     max_well_volume = Column(Float)
+    default_focus= Column(Float)

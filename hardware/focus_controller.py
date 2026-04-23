@@ -16,6 +16,9 @@ class Focus(ABC):
     def move_z(self, distance):
         pass
 
+    def autofocus(self, status=False):
+        return not status
+
     def get_z(self):
         pass
 
@@ -62,6 +65,10 @@ class OlympusX81FocusController(Focus):
 
     def move_z(self, distance):
         pass
+
+    def autofocus(self, status=False):
+        self.logger.warning("Autofocus is not implemented for OlympusX81 focus controller.")
+        return not status
 
     def get_z(self):
         pass

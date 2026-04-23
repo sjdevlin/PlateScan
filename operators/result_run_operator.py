@@ -31,6 +31,7 @@ class ResultRunOperator:
         self.number_of_sites = max(1, int(self.image_set.number_of_sites or 1))
         self.stack_size = max(1, int(self.image_set.stack_size or 1))
         self.stack_step_size = int(self.image_set.stack_step_size or 1)
+        self.use_autofocus = bool(getattr(self.image_set, "autofocus", False))
 
         self.well_list = normalize_well_list(self.image_set.wells or "")
         self._validate_wells_fit_plate()
@@ -91,6 +92,21 @@ class ResultRunOperator:
         if self.stop_event is not None:
             self.stop_event.set()
 
+    def move_to_first_site_for_focus_check(self):
+        if not self.well_list:
+            raise ValueError("ImageSet does not contain any wells.")
+
+        first_well = self.well_list[0]
+        row_index, col_index = parse_well_designator(first_well)
+        self._move_stage_to_site(row_index, col_index, site_number=0)
+        self.focus_controller.autofocus(False)
+        return first_well
+
+    def capture_focus_position(self):
+        self.focus_position = self.focus_controller.get_z()
+        self.logger.info(f"Captured manual focus z position {self.focus_position:.2f}")
+        return self.focus_position
+
     def run(self):
         try:
             self._raise_if_stopped()
@@ -99,8 +115,14 @@ class ResultRunOperator:
             if self.dry_run:
                 self.logger.info("Result run operator is executing in dry-run mode.")
 
-            self.focus_position = self.focus_controller.get_z()
+            if self.focus_position is None:
+                self.focus_position = self.focus_controller.get_z()
             self.logger.info(f"Initial focus z set to {self.focus_position:.2f}")
+            if self.use_autofocus:
+                if not self.focus_controller.autofocus(True):
+                    raise RuntimeError("Failed to enable autofocus before imaging run")
+            else:
+                self.focus_controller.autofocus(False)
 
             for well in self.well_list:
                 self._raise_if_stopped()
@@ -116,7 +138,7 @@ class ResultRunOperator:
                     self.camera_controller.set_filename(movie_stub)
 
                     self._move_stage_to_site(row_index, col_index, site_number)
-                    self.focus_controller.move_z(self.focus_position)
+                    self._prepare_focus_for_site()
 
                     self._take_stack()
                     movie_filename = f"{movie_stub}{self.app_config.get('movie_extension', '.movie')}"
@@ -140,6 +162,11 @@ class ResultRunOperator:
                 self.db.update_result_run(self.result_run)
             except Exception as exc:
                 self.logger.error(f"Failed to persist run status: {exc}")
+
+            try:
+                self.focus_controller.autofocus(False)
+            except Exception as exc:
+                self.logger.error(f"Failed to disable autofocus: {exc}")
 
             try:
                 self.illumination_controller.illumination_enable(0x00, hex_mode=True)
@@ -183,6 +210,19 @@ class ResultRunOperator:
         self.stage_controller.move(position=x, axis="x", speed="normal")
         self.stage_controller.move(position=y, axis="y", speed="normal")
         sleep(1)
+
+    def _prepare_focus_for_site(self):
+        if self.use_autofocus:
+            if not self.focus_controller.autofocus(True):
+                raise RuntimeError("Failed to re-enable autofocus after moving to a new site")
+            locked_z = self.focus_controller.get_z()
+            if locked_z is not None:
+                self.focus_position = locked_z
+                self.logger.info(f"Autofocus locked at z={self.focus_position:.2f}")
+            return
+
+        self.focus_controller.autofocus(False)
+        self.focus_controller.move_z(self.focus_position)
 
     def _take_stack(self):
         self.camera_controller.start_recording()

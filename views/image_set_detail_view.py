@@ -6,7 +6,7 @@ class ImageSetDetailView:
     def __init__(self, title="Image Set Detail"):
         self.root_window = customtkinter.CTkToplevel()
         self.root_window.title(title)
-        self.root_window.geometry("680x600")
+        self.root_window.geometry("680x640")
 
         self.home_frame = customtkinter.CTkFrame(self.root_window)
         self.home_frame.pack(fill="both", expand=True, padx=20, pady=20)
@@ -55,8 +55,14 @@ class ImageSetDetailView:
             entry.grid(row=row_index + row_offset, column=1, sticky="ew", pady=8)
             self.entries[key] = entry
 
+        autofocus_row = len(labels) + row_offset
+        autofocus_label = customtkinter.CTkLabel(self.home_frame, text="Autofocus Between Locations")
+        autofocus_label.grid(row=autofocus_row, column=0, sticky="w", padx=(0, 10), pady=8)
+        self.autofocus_switch = customtkinter.CTkSwitch(self.home_frame, text="Enabled")
+        self.autofocus_switch.grid(row=autofocus_row, column=1, sticky="w", pady=8)
+
         self.button_frame = customtkinter.CTkFrame(self.home_frame, fg_color="transparent")
-        self.button_frame.grid(row=len(labels) + row_offset, column=0, columnspan=2, sticky="ew", pady=(20, 0))
+        self.button_frame.grid(row=autofocus_row + 1, column=0, columnspan=2, sticky="ew", pady=(20, 0))
         self.button_frame.grid_columnconfigure(0, weight=1)
         self.button_frame.grid_columnconfigure(1, weight=1)
 
@@ -72,9 +78,15 @@ class ImageSetDetailView:
             if value is None:
                 value = ""
             entry.insert(0, str(value))
+        if bool(values.get("autofocus", False)):
+            self.autofocus_switch.select()
+        else:
+            self.autofocus_switch.deselect()
 
     def get_form_values(self):
-        return {key: entry.get().strip() for key, entry in self.entries.items()}
+        values = {key: entry.get().strip() for key, entry in self.entries.items()}
+        values["autofocus"] = self.autofocus_switch.get() == 1
+        return values
 
     def confirm_discard(self):
         return messagebox.askyesno("Discard Changes", "Discard unsaved changes?")

@@ -45,7 +45,7 @@ class ImageSetManagerView:
             font=("Arial", 10, "bold"),
         )
 
-        self.columns = ("id", "description", "sites", "stack_size", "stack_step", "led_1", "led_2")
+        self.columns = ("id", "description", "sites", "stack_size", "stack_step", "autofocus", "led_1", "led_2")
         self.table = ttk.Treeview(self.table_frame, columns=self.columns, show="headings")
 
         self.table.heading("id", text="ID")
@@ -53,6 +53,7 @@ class ImageSetManagerView:
         self.table.heading("sites", text="Number of Sites")
         self.table.heading("stack_size", text="Stack Size")
         self.table.heading("stack_step", text="Stack Step")
+        self.table.heading("autofocus", text="Autofocus")
         self.table.heading("led_1", text="LED 1")
         self.table.heading("led_2", text="LED 2")
 
@@ -61,6 +62,7 @@ class ImageSetManagerView:
         self.table.column("sites", width=120, anchor="w", stretch=False)
         self.table.column("stack_size", width=100, anchor="w", stretch=False)
         self.table.column("stack_step", width=100, anchor="w", stretch=False)
+        self.table.column("autofocus", width=100, anchor="w", stretch=False)
         self.table.column("led_1", width=80, anchor="w", stretch=False)
         self.table.column("led_2", width=80, anchor="w", stretch=False)
 

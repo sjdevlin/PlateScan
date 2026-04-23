@@ -2,13 +2,14 @@ import threading
 from tkinter import messagebox, simpledialog
 
 from operators import ResultRunOperator
-from services import normalize_well_list
+from services import Logger, normalize_well_list
 
 
 class ImagingRunLauncherPresenter:
     def __init__(self, view, db):
         self.view = view
         self.db = db
+        self.logger = Logger()
 
         self.selected_image_set_id = None
         self.selected_plate_id = None
@@ -30,17 +31,16 @@ class ImagingRunLauncherPresenter:
         image_sets = self.db.get_all_image_sets()
         image_set_rows = []
         for image_set in image_sets:
-            wells = []
-            if image_set.wells:
-                wells = normalize_well_list(image_set.wells)
+            well_count = self._count_wells_for_display(image_set)
             image_set_rows.append(
                 (
                     image_set.id,
                     image_set.description,
-                    len(wells),
+                    well_count,
                     image_set.number_of_sites,
                     image_set.stack_size,
                     image_set.stack_step_size,
+                    "On" if bool(getattr(image_set, "autofocus", False)) else "Off",
                 )
             )
         self.view.list_image_sets(image_set_rows)
@@ -97,6 +97,11 @@ class ImagingRunLauncherPresenter:
             return
 
         messagebox.showinfo("Check Origin", "Please confirm the X and Y co-ordinates are reset to origin.")
+        if bool(getattr(image_set, "autofocus", False)):
+            messagebox.showinfo(
+                "Autofocus Enabled",
+                "Autofocus is enabled for this image set. Please confirm focus is locked before starting the run.",
+            )
 
         stop_event = threading.Event()
 
@@ -119,6 +124,18 @@ class ImagingRunLauncherPresenter:
             )
         except Exception as exc:
             messagebox.showerror("Run Error", str(exc))
+            return
+
+        try:
+            first_well = operator.move_to_first_site_for_focus_check()
+            messagebox.showinfo(
+                "Focus Check",
+                f"The microscope has moved to the first well ({first_well}). "
+                "Adjust the image into focus, then press OK to start the run.",
+            )
+            operator.capture_focus_position()
+        except Exception as exc:
+            messagebox.showerror("Run Error", f"Failed to prepare the first well for focus check:\n{exc}")
             return
 
         run_thread = threading.Thread(target=operator.run, daemon=False)
@@ -168,3 +185,17 @@ class ImagingRunLauncherPresenter:
         self.view.set_status("Idle")
         self.view.set_stop_enabled(False)
         self._update_run_button_state()
+
+    def _count_wells_for_display(self, image_set):
+        raw_wells = image_set.wells or ""
+        if not raw_wells.strip():
+            return 0
+
+        try:
+            return len(normalize_well_list(raw_wells))
+        except Exception as exc:
+            raw_count = len([part for part in raw_wells.split(",") if part.strip()])
+            self.logger.warning(
+                f"Image set {image_set.id} has invalid well definitions; displaying raw count instead: {exc}"
+            )
+            return raw_count
