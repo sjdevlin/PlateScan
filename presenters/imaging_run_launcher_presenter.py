@@ -19,6 +19,7 @@ class ImagingRunLauncherPresenter:
         self.current_thread = None
         self.current_stop_event = None
         self.dry_run = False
+        self.run_paused = False
 
         self.view.bind_image_set_selection(self.on_image_set_selected)
         self.view.bind_plate_selection(self.on_plate_selected)
@@ -104,6 +105,16 @@ class ImagingRunLauncherPresenter:
             )
 
         stop_event = threading.Event()
+        progress_window = self.view.open_progress_window()
+        progress_window.bind_pause(self.toggle_pause_run)
+        progress_window.bind_cancel(self.stop_run)
+        progress_window.bind_close(self.stop_run)
+        progress_window.set_pause_text("Pause")
+        progress_window.set_pause_enabled(False)
+        progress_window.set_cancel_enabled(False)
+
+        def handle_progress(progress):
+            self.view.root_window.after(0, lambda: self._update_progress_window(progress))
 
         def handle_operator_error(source, error_message):
             if stop_event is not None:
@@ -121,8 +132,10 @@ class ImagingRunLauncherPresenter:
                 db=self.db,
                 stop_event=stop_event,
                 error_callback=handle_operator_error,
+                progress_callback=handle_progress,
             )
         except Exception as exc:
+            self.view.close_progress_window()
             messagebox.showerror("Run Error", str(exc))
             return
 
@@ -135,6 +148,7 @@ class ImagingRunLauncherPresenter:
             )
             operator.capture_focus_position()
         except Exception as exc:
+            self.view.close_progress_window()
             messagebox.showerror("Run Error", f"Failed to prepare the first well for focus check:\n{exc}")
             return
 
@@ -149,6 +163,8 @@ class ImagingRunLauncherPresenter:
         self.view.set_status("Running (Dry Run)" if self.dry_run else "Running")
         self.view.set_run_enabled(False)
         self.view.set_stop_enabled(True)
+        progress_window.set_pause_enabled(True)
+        progress_window.set_cancel_enabled(True)
 
         run_thread.start()
 
@@ -159,7 +175,7 @@ class ImagingRunLauncherPresenter:
         if not self.run_active:
             return
 
-        if not messagebox.askyesno("Stop Run", "Stop/cancel the current run?"):
+        if not messagebox.askyesno("Stop Run", "Cancel the current imaging run?"):
             return
 
         if self.current_operator is not None:
@@ -170,6 +186,25 @@ class ImagingRunLauncherPresenter:
 
         self.view.set_status("Stopping (Dry Run)" if self.dry_run else "Stopping")
         self.view.set_stop_enabled(False)
+        if self.view.progress_window is not None:
+            self.view.progress_window.set_status("Stopping")
+            self.view.progress_window.set_pause_enabled(False)
+            self.view.progress_window.set_cancel_enabled(False)
+
+    def toggle_pause_run(self):
+        if not self.run_active or self.current_operator is None:
+            return
+
+        if self.run_paused:
+            self.current_operator.request_resume("Run resume requested from UI")
+            self.run_paused = False
+            if self.view.progress_window is not None:
+                self.view.progress_window.set_pause_text("Pause")
+        else:
+            self.current_operator.request_pause("Run pause requested from UI")
+            self.run_paused = True
+            if self.view.progress_window is not None:
+                self.view.progress_window.set_pause_text("Resume")
 
     def _monitor_run_completion(self, run_thread):
         run_thread.join()
@@ -177,6 +212,7 @@ class ImagingRunLauncherPresenter:
 
     def _on_run_finished(self):
         self.run_active = False
+        self.run_paused = False
         self.current_operator = None
         self.current_thread = None
         self.current_stop_event = None
@@ -184,7 +220,25 @@ class ImagingRunLauncherPresenter:
 
         self.view.set_status("Idle")
         self.view.set_stop_enabled(False)
+        self.view.close_progress_window()
         self._update_run_button_state()
+
+    def _update_progress_window(self, progress):
+        progress_window = self.view.progress_window
+        if progress_window is None:
+            return
+
+        status = progress.get("status") or "Running"
+        if progress.get("dry_run") and status == "Running":
+            status = "Running (Dry Run)"
+
+        progress_window.set_status(status)
+        progress_window.set_phase(progress.get("phase"))
+        progress_window.set_location(progress.get("well"), progress.get("site_number"))
+        progress_window.set_stack_channel(progress.get("stack_index"), progress.get("channel_number"))
+        progress_window.set_site_counts(progress.get("completed_sites", 0), progress.get("total_sites", 0))
+        progress_window.set_frame_counts(progress.get("completed_frames", 0), progress.get("total_frames", 0))
+        progress_window.set_progress(progress.get("completed_sites", 0), progress.get("total_sites", 0))
 
     def _count_wells_for_display(self, image_set):
         raw_wells = image_set.wells or ""

@@ -84,6 +84,9 @@ class TemikaComms(metaclass=Singleton):
 
 
         try:
+            command_preview = " ".join(command.split())
+            if len(command_preview) > 160:
+                command_preview = f"{command_preview[:157]}..."
 
             # Clear any data in the receive buffer before sending command
             try:
@@ -112,7 +115,9 @@ class TemikaComms(metaclass=Singleton):
                     while True:
                         # Check if timeout has been reached
                         if time.time() - start_time > self.timeout:
-                            self.logger.error(f"Timeout after {self.timeout}s waiting for 'Done' response")
+                            self.logger.error(
+                                f"Timeout after {self.timeout}s waiting for '{wait_for}' response to command: {command_preview}"
+                            )
                             break
                         
                         readable, _, _ = select.select([self.socket], [], [], 1.0)

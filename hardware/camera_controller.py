@@ -79,8 +79,10 @@ class FlirCameraAdapter(BaseCamera):
         self.temika_comms = TemikaComms()
         self.logger.info("TemikaCameraAdapter initialized.")
         self.camera_name = self.app_config.get("camera_name")
+        self.temika_name = self.app_config.get("temika_name")
         self.image_dimension_x = self.app_config.get("image_dimension_x", 1920)  # Default to 1920 if not set
         self.image_dimension_y = self.app_config.get("image_dimension_y", 1080)
+        self.exposure_time_us = self.app_config.get("exposure_time", 200000)
         # permanent camera settings
 
     def set_trigger(self):
@@ -97,6 +99,7 @@ class FlirCameraAdapter(BaseCamera):
 
 
     def set_exposure_time(self, exposure_time):
+        self.exposure_time_us = exposure_time
         command = f"<camera name=\"{self.camera_name}\">"
         command += "<genicam>"
         command += f"<float feature=\"ExposureTime\">{exposure_time}</float>"
@@ -124,16 +127,23 @@ class FlirCameraAdapter(BaseCamera):
         command = f"<camera name=\"{self.camera_name}\">"
         command += "<send_trigger></send_trigger>"
         command += "</camera>"
-        self.temika_comms.send_command(command, wait_for="Done")
+        self.temika_comms.send_command(command)
+        sleep(max(0.02, float(self.exposure_time_us) / 1_000_000.0 + 0.02))
 
     def start_recording(self):        
         command = f"<camera name=\"{self.camera_name}\">"
         command += "<record>ON</record>"
         command += "</camera>\n"
         self.temika_comms.send_command(command)
+        if self.temika_name:
+            scope_command = f"<{self.temika_name}><record>ON</record></{self.temika_name}>"
+            self.temika_comms.send_command(scope_command)
 
     def stop_recording(self):        
         command = f"<camera name=\"{self.camera_name}\">"
         command += "<record>OFF</record>"
         command += "</camera>\n"
         self.temika_comms.send_command(command)
+        if self.temika_name:
+            scope_command = f"<{self.temika_name}><record>OFF</record></{self.temika_name}>"
+            self.temika_comms.send_command(scope_command)

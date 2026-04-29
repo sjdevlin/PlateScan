@@ -2,6 +2,7 @@ from datetime import datetime
 from pathlib import Path
 from time import sleep
 import random
+import threading
 
 from PIL import Image as PilImage, ImageDraw
 
@@ -15,7 +16,16 @@ class RunStopped(Exception):
 
 
 class ResultRunOperator:
-    def __init__(self, plate, image_set, run_description, db, stop_event=None, error_callback=None):
+    def __init__(
+        self,
+        plate,
+        image_set,
+        run_description,
+        db,
+        stop_event=None,
+        error_callback=None,
+        progress_callback=None,
+    ):
         self.db = db
         self.logger = Logger()
         self.app_config = AppConfig()
@@ -25,6 +35,9 @@ class ResultRunOperator:
         self.run_description = run_description
         self.stop_event = stop_event
         self.error_callback = error_callback
+        self.progress_callback = progress_callback
+        self.pause_event = threading.Event()
+        self.pause_event.set()
 
         self.converter = Movie2Tiff()
 
@@ -86,11 +99,34 @@ class ResultRunOperator:
         self.result_run = self.db.get_result_run_by_id(self.result_run_id)
         self.focus_position = None
         self.site_offsets = self._build_site_offsets()
+        self.total_wells = len(self.well_list)
+        self.total_sites = self.total_wells * self.number_of_sites
+        self.total_frames = self.total_sites * self.stack_size * max(1, len(self.active_channels))
+        self.completed_sites = 0
+        self.completed_frames = 0
+        self.current_well = None
+        self.current_site_number = None
+        self.current_stack_index = None
+        self.current_channel_number = None
+        self.current_phase = "Initializing"
+
+        self._publish_progress(status="Ready")
 
     def request_stop(self, reason="Run stop requested"):
         self.logger.warning(reason)
         if self.stop_event is not None:
             self.stop_event.set()
+        self.pause_event.set()
+
+    def request_pause(self, reason="Run pause requested"):
+        self.logger.warning(reason)
+        self.pause_event.clear()
+        self._publish_progress(status="Paused")
+
+    def request_resume(self, reason="Run resume requested"):
+        self.logger.info(reason)
+        self.pause_event.set()
+        self._publish_progress(status="Running")
 
     def move_to_first_site_for_focus_check(self):
         if not self.well_list:
@@ -110,6 +146,7 @@ class ResultRunOperator:
     def run(self):
         try:
             self._raise_if_stopped()
+            self._wait_if_paused()
             self.logger.info("Camera trigger enabled")
             self.camera_controller.set_trigger()
             if self.dry_run:
@@ -118,42 +155,61 @@ class ResultRunOperator:
             if self.focus_position is None:
                 self.focus_position = self.focus_controller.get_z()
             self.logger.info(f"Initial focus z set to {self.focus_position:.2f}")
-            if self.use_autofocus:
-                if not self.focus_controller.autofocus(True):
-                    raise RuntimeError("Failed to enable autofocus before imaging run")
-            else:
-                self.focus_controller.autofocus(False)
+            self.focus_controller.autofocus(False)
 
             for well in self.well_list:
                 self._raise_if_stopped()
+                self._wait_if_paused()
                 row_index, col_index = parse_well_designator(well)
                 row_label = index_to_row_label(row_index)
                 column_number = col_index + 1
+                self.current_well = well
 
                 for site_number in range(self.number_of_sites):
                     self._raise_if_stopped()
+                    self._wait_if_paused()
+                    self.current_site_number = site_number
+                    self.current_stack_index = None
+                    self.current_channel_number = None
+                    self.current_phase = "Moving to site"
+                    self._publish_progress(status="Running")
 
                     movie_stub = f"{self.movie_path}/{self.result_run.id}_{well}_{site_number}"
                     image_stub = f"{self.image_path}/{self.result_run.id}_{well}_{site_number}"
                     self.camera_controller.set_filename(movie_stub)
 
                     self._move_stage_to_site(row_index, col_index, site_number)
+                    self.current_phase = "Preparing focus"
+                    self._publish_progress(status="Running")
                     self._prepare_focus_for_site()
 
+                    self.current_phase = "Capturing stack"
+                    self._publish_progress(status="Running")
                     self._take_stack()
                     movie_filename = f"{movie_stub}{self.app_config.get('movie_extension', '.movie')}"
+                    self.current_phase = "Extracting images"
+                    self._publish_progress(status="Running")
                     self._process_stack(movie_filename, image_stub, row_label, column_number, site_number)
+                    self.completed_sites += 1
+                    self.current_phase = "Site complete"
+                    self._publish_progress(status="Running")
 
             self.result_run.status = "Complete"
+            self.current_phase = "Complete"
+            self._publish_progress(status="Complete")
 
         except RunStopped:
             if self.result_run.status == "Running":
                 self.result_run.status = "Aborted"
             self.logger.warning("Imaging run stopped")
+            self.current_phase = "Stopped"
+            self._publish_progress(status="Aborted")
 
         except Exception as exc:
             self.result_run.status = "Failed"
             self.logger.error(f"Imaging run failed: {exc}")
+            self.current_phase = "Failed"
+            self._publish_progress(status="Failed", error=str(exc))
             self._notify_error("imaging", exc)
 
         finally:
@@ -219,6 +275,8 @@ class ResultRunOperator:
             if locked_z is not None:
                 self.focus_position = locked_z
                 self.logger.info(f"Autofocus locked at z={self.focus_position:.2f}")
+            self.focus_controller.autofocus(False)
+            self.logger.info("Autofocus disabled for manual z-stack capture.")
             return
 
         self.focus_controller.autofocus(False)
@@ -226,17 +284,29 @@ class ResultRunOperator:
 
     def _take_stack(self):
         self.camera_controller.start_recording()
+        base_focus_z = self.focus_position
 
         for stack_index in range(self.stack_size):
             self._raise_if_stopped()
+            self._wait_if_paused()
+            self.current_stack_index = stack_index
 
-            if stack_index > 0 and self.stack_step_size:
+            if stack_index == 0 and base_focus_z is not None:
+                self.focus_controller.move_z(base_focus_z, speed="normal")
+            elif stack_index > 0 and self.stack_step_size:
                 new_z = self.focus_controller.get_z() + self.stack_step_size
                 self.focus_controller.move_z(new_z, speed="normal")
 
             for channel in self.active_channels:
+                self._raise_if_stopped()
+                self._wait_if_paused()
+                self.current_channel_number = channel["number"]
+                self._publish_progress(status="Running")
                 self.illumination_controller.illumination_enable(channel["bitmask"], hex_mode=True)
                 self.camera_controller.capture_image()
+
+        if base_focus_z is not None and self.stack_size > 1:
+            self.focus_controller.move_z(base_focus_z, speed="normal")
 
         self.camera_controller.stop_recording()
 
@@ -249,9 +319,13 @@ class ResultRunOperator:
         channel_count = max(1, len(self.active_channels))
 
         for idx, (file, score) in enumerate(zip(filenames, focus_scores)):
+            self._raise_if_stopped()
+            self._wait_if_paused()
             file_path = Path(str(file)).name
             channel = self.active_channels[idx % channel_count]
             z_stack_number = idx // channel_count
+            self.current_stack_index = z_stack_number
+            self.current_channel_number = channel["number"]
 
             new_image = Image(
                 result_run_id=self.result_run.id,
@@ -267,6 +341,8 @@ class ResultRunOperator:
                 focus_score=score,
             )
             self.db.add_result_run_image(new_image)
+            self.completed_frames += 1
+            self._publish_progress(status="Running")
 
     def _process_stack_dry_run(self, image_stub, well_row, well_column, site_number):
         image_stub_path = Path(image_stub)
@@ -276,9 +352,13 @@ class ResultRunOperator:
         frame_counter = 0
         for stack_number in range(self.stack_size):
             for channel in self.active_channels:
+                self._raise_if_stopped()
+                self._wait_if_paused()
                 frame_counter += 1
                 filename = output_dir / f"{image_stub_path.name}_{frame_counter:03d}.png"
                 focus_score = float((self.stack_size - stack_number) * 10 + channel["number"])
+                self.current_stack_index = stack_number
+                self.current_channel_number = channel["number"]
                 self._write_mock_image(
                     file_path=filename,
                     well_row=well_row,
@@ -302,6 +382,8 @@ class ResultRunOperator:
                     focus_score=focus_score,
                 )
                 self.db.add_result_run_image(new_image)
+                self.completed_frames += 1
+                self._publish_progress(status="Running")
 
     def _write_mock_image(self, file_path, well_row, well_column, site_number, stack_number, channel_number):
         width = int(getattr(self.camera_controller, "image_dimension_x", 512) or 512)
@@ -333,6 +415,34 @@ class ResultRunOperator:
     def _raise_if_stopped(self):
         if self._stop_requested():
             raise RunStopped()
+
+    def _wait_if_paused(self):
+        while not self.pause_event.is_set():
+            self._raise_if_stopped()
+            sleep(0.1)
+
+    def _publish_progress(self, status=None, error=None):
+        if not callable(self.progress_callback):
+            return
+        try:
+            self.progress_callback(
+                {
+                    "status": status or self.result_run.status,
+                    "phase": self.current_phase,
+                    "well": self.current_well,
+                    "site_number": self.current_site_number,
+                    "stack_index": self.current_stack_index,
+                    "channel_number": self.current_channel_number,
+                    "completed_sites": self.completed_sites,
+                    "total_sites": self.total_sites,
+                    "completed_frames": self.completed_frames,
+                    "total_frames": self.total_frames,
+                    "dry_run": self.dry_run,
+                    "error": error,
+                }
+            )
+        except Exception:
+            pass
 
     def _notify_error(self, source, exc):
         if self.stop_event is not None:

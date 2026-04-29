@@ -2,6 +2,117 @@ import customtkinter
 from tkinter import ttk
 
 
+class ImagingRunProgressWindow:
+    def __init__(self, parent):
+        self.root_window = customtkinter.CTkToplevel(parent)
+        self.root_window.title("Imaging Run Progress")
+        self.root_window.geometry("520x320")
+        self.root_window.grid_columnconfigure(0, weight=1)
+        self.root_window.grid_rowconfigure(1, weight=1)
+
+        self.header_label = customtkinter.CTkLabel(
+            self.root_window,
+            text="Imaging Run In Progress",
+            font=customtkinter.CTkFont(size=18, weight="bold"),
+        )
+        self.header_label.grid(row=0, column=0, padx=20, pady=(18, 10), sticky="w")
+
+        self.body_frame = customtkinter.CTkFrame(self.root_window)
+        self.body_frame.grid(row=1, column=0, padx=20, pady=10, sticky="nsew")
+        self.body_frame.grid_columnconfigure(0, weight=1)
+
+        self.status_label = customtkinter.CTkLabel(self.body_frame, text="Status: Idle", anchor="w")
+        self.phase_label = customtkinter.CTkLabel(self.body_frame, text="Phase: --", anchor="w")
+        self.location_label = customtkinter.CTkLabel(self.body_frame, text="Well/Site: --", anchor="w")
+        self.stack_label = customtkinter.CTkLabel(self.body_frame, text="Stack/Channel: --", anchor="w")
+        self.site_count_label = customtkinter.CTkLabel(self.body_frame, text="Sites: 0 / 0", anchor="w")
+        self.frame_count_label = customtkinter.CTkLabel(self.body_frame, text="Frames: 0 / 0", anchor="w")
+        self.progress_bar = customtkinter.CTkProgressBar(self.body_frame)
+        self.progress_bar.set(0)
+
+        self.status_label.grid(row=0, column=0, padx=16, pady=(16, 8), sticky="ew")
+        self.phase_label.grid(row=1, column=0, padx=16, pady=8, sticky="ew")
+        self.location_label.grid(row=2, column=0, padx=16, pady=8, sticky="ew")
+        self.stack_label.grid(row=3, column=0, padx=16, pady=8, sticky="ew")
+        self.site_count_label.grid(row=4, column=0, padx=16, pady=8, sticky="ew")
+        self.frame_count_label.grid(row=5, column=0, padx=16, pady=8, sticky="ew")
+        self.progress_bar.grid(row=6, column=0, padx=16, pady=(12, 16), sticky="ew")
+
+        self.button_frame = customtkinter.CTkFrame(self.root_window, fg_color="transparent")
+        self.button_frame.grid(row=2, column=0, padx=20, pady=(0, 18), sticky="ew")
+        self.button_frame.grid_columnconfigure(0, weight=1)
+        self.button_frame.grid_columnconfigure(1, weight=1)
+
+        self.pause_button = customtkinter.CTkButton(
+            self.button_frame,
+            text="Pause",
+            fg_color="#995c00",
+        )
+        self.cancel_button = customtkinter.CTkButton(
+            self.button_frame,
+            text="Cancel Run",
+            fg_color="#8b1a1a",
+        )
+
+        self.pause_button.grid(row=0, column=0, padx=(0, 8), pady=8, sticky="ew")
+        self.cancel_button.grid(row=0, column=1, padx=(8, 0), pady=8, sticky="ew")
+        self.root_window.protocol("WM_DELETE_WINDOW", self.root_window.lift)
+
+    def set_status(self, text):
+        self.status_label.configure(text=f"Status: {text}")
+
+    def set_phase(self, text):
+        self.phase_label.configure(text=f"Phase: {text or '--'}")
+
+    def set_location(self, well, site_number):
+        if well is None or site_number is None:
+            text = "Well/Site: --"
+        else:
+            text = f"Well/Site: {well} / Site {site_number + 1}"
+        self.location_label.configure(text=text)
+
+    def set_stack_channel(self, stack_index, channel_number):
+        if stack_index is None and channel_number is None:
+            text = "Stack/Channel: --"
+        else:
+            stack_text = "--" if stack_index is None else str(stack_index + 1)
+            channel_text = "--" if channel_number is None else str(channel_number)
+            text = f"Stack/Channel: {stack_text} / {channel_text}"
+        self.stack_label.configure(text=text)
+
+    def set_site_counts(self, completed, total):
+        self.site_count_label.configure(text=f"Sites: {completed} / {total}")
+
+    def set_frame_counts(self, completed, total):
+        self.frame_count_label.configure(text=f"Frames: {completed} / {total}")
+
+    def set_progress(self, completed, total):
+        ratio = 0 if total <= 0 else max(0.0, min(1.0, completed / total))
+        self.progress_bar.set(ratio)
+
+    def set_pause_text(self, text):
+        self.pause_button.configure(text=text)
+
+    def set_pause_enabled(self, enabled):
+        self.pause_button.configure(state=customtkinter.NORMAL if enabled else customtkinter.DISABLED)
+
+    def set_cancel_enabled(self, enabled):
+        self.cancel_button.configure(state=customtkinter.NORMAL if enabled else customtkinter.DISABLED)
+
+    def bind_pause(self, callback):
+        self.pause_button.configure(command=callback)
+
+    def bind_cancel(self, callback):
+        self.cancel_button.configure(command=callback)
+
+    def bind_close(self, callback):
+        self.root_window.protocol("WM_DELETE_WINDOW", callback)
+
+    def close(self):
+        if self.root_window.winfo_exists():
+            self.root_window.destroy()
+
+
 class ImagingRunLauncherView:
     def __init__(self):
         self.root_window = customtkinter.CTkToplevel()
@@ -106,6 +217,7 @@ class ImagingRunLauncherView:
         self.run_button.grid(row=0, column=0, padx=10, pady=8)
         self.stop_button.grid(row=0, column=1, padx=10, pady=8)
         self.status_label.grid(row=0, column=2, padx=10, pady=8, sticky="e")
+        self.progress_window = None
 
     def bind_image_set_selection(self, callback):
         self.image_set_table.bind("<<TreeviewSelect>>", callback)
@@ -143,3 +255,16 @@ class ImagingRunLauncherView:
 
     def set_status(self, text):
         self.status_label.configure(text=text)
+
+    def open_progress_window(self):
+        if self.progress_window is not None and self.progress_window.root_window.winfo_exists():
+            self.progress_window.root_window.lift()
+            self.progress_window.root_window.focus()
+            return self.progress_window
+        self.progress_window = ImagingRunProgressWindow(self.root_window)
+        return self.progress_window
+
+    def close_progress_window(self):
+        if self.progress_window is not None:
+            self.progress_window.close()
+            self.progress_window = None

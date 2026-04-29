@@ -14,9 +14,9 @@ Process **all** frames and return filenames + focus scores.
 
         Returns
         -------
-        (list[Path], list[float], list[float])
-            *Absolute* paths of written image files, their corresponding focus
-            scores, and highest pixel values (same order).
+        (list[Path], list[float])
+            *Absolute* paths of written image files and their corresponding
+            focus scores (same order).
         sion extracts **every frame** from a proprietary *TemI* movie, saves
 each frame to an individual TIFF, and returns the filename list **plus a per-
 frame focus score**.  Filenames are based on a *stub* that you supply (or the
@@ -37,6 +37,7 @@ No OpenCV/SciPy needed  implemented with NumPy slicing.
 from __future__ import annotations
 
 import json
+import os
 import struct
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -222,12 +223,28 @@ class Movie2Tiff:
             idx = data.find(magic, off)
             if idx == -1:
                 break
+            if idx + CAMERA_HEADER_LEN > total:
+                raise ValueError(f"Incomplete frame header at offset {idx}")
             hdr = FrameHeader.from_bytes(data[idx : idx + CAMERA_HEADER_LEN])
+            if hdr.length_header < CAMERA_HEADER_LEN:
+                raise ValueError(
+                    f"Invalid frame header length {hdr.length_header} at offset {idx}"
+                )
             extra_start = idx + CAMERA_HEADER_LEN
             extra_end = idx + hdr.length_header
+            if extra_end > total:
+                raise ValueError(
+                    f"Frame header overruns file at offset {idx}: "
+                    f"header_end={extra_end}, file_size={total}"
+                )
             extra = data[extra_start:extra_end]
             frame_start = extra_end
             frame_end = frame_start + hdr.length_data
+            if frame_end > total:
+                raise ValueError(
+                    f"Frame data overruns file at offset {idx}: "
+                    f"frame_end={frame_end}, file_size={total}"
+                )
             yield hdr, extra, memoryview(data)[frame_start:frame_end]
             off = frame_end
 
@@ -347,6 +364,14 @@ class Movie2Tiff:
             out = np.empty((h, w), dtype=np.uint8)
             for r in range(h):
                 off = r * stride
+                required_bytes = w
+                available_bytes = len(buf) - off
+                if available_bytes < required_bytes:
+                    raise ValueError(
+                        f"Buffer too small at row {r}: need {required_bytes} bytes, "
+                        f"have {available_bytes} bytes (offset={off}, buf_len={len(buf)}, "
+                        f"width={w}, height={h}, stride={stride})"
+                    )
                 out[r] = np.frombuffer(buf[off : off + w], dtype=np.uint8, count=w)
             
             # Apply downsampling if requested
@@ -384,7 +409,15 @@ class Movie2Tiff:
             out = np.empty((h, w), dtype=np.uint16)
             for r in range(h):
                 off = r * stride
-                packed = buf[off : off + ((w + 1) // 2) * 3]
+                required_bytes = ((w + 1) // 2) * 3
+                available_bytes = len(buf) - off
+                if available_bytes < required_bytes:
+                    raise ValueError(
+                        f"Buffer too small at row {r}: need {required_bytes} bytes, "
+                        f"have {available_bytes} bytes (offset={off}, buf_len={len(buf)}, "
+                        f"width={w}, height={h}, stride={stride})"
+                    )
+                packed = buf[off : off + required_bytes]
                 j = 0
                 for c in range(0, w, 2):
                     b0, b1, b2 = packed[j : j + 3]
@@ -403,6 +436,14 @@ class Movie2Tiff:
             out = np.empty((h, w), dtype=np.uint32)
             for r in range(h):
                 off = r * stride
+                required_bytes = w * 4
+                available_bytes = len(buf) - off
+                if available_bytes < required_bytes:
+                    raise ValueError(
+                        f"Buffer too small at row {r}: need {required_bytes} bytes, "
+                        f"have {available_bytes} bytes (offset={off}, buf_len={len(buf)}, "
+                        f"width={w}, height={h}, stride={stride})"
+                    )
                 row = np.frombuffer(buf[off : off + w * 4], dtype="<u4", count=w)
                 if hdr.endianness == G_BIG_ENDIAN:
                     row = row.byteswap()
@@ -430,6 +471,16 @@ class Movie2Tiff:
             self._save_png(arr, path, hdr, extra, focus_score)
         else:
             self._save_tiff(arr, path, hdr, extra, focus_score)
+
+    @staticmethod
+    def _atomic_save(img: Image.Image, path: Path, **save_kwargs) -> None:
+        """Write to a temporary sibling file, then atomically replace target."""
+        tmp_path = path.with_name(f".{path.name}.tmp")
+        try:
+            img.save(str(tmp_path), **save_kwargs)
+            os.replace(tmp_path, path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
 
     def _save_tiff(
         self,
@@ -462,8 +513,9 @@ class Movie2Tiff:
         ifd[TAG_IMAGE_DESCRIPTION] = json.dumps(meta_json, indent=2)
         ifd[TAG_DATETIME] = hdr.timestamp.strftime("%Y:%m:%d %H:%M:%S")
 
-        img.save(
-            str(path),
+        self._atomic_save(
+            img,
+            path,
             format="TIFF",
             compression=None if self.compression == "raw" else self.compression,
             tiffinfo=ifd,
@@ -502,19 +554,21 @@ class Movie2Tiff:
             pnginfo.add_text("DateTime", hdr.timestamp.strftime("%Y:%m:%d %H:%M:%S"))
             pnginfo.add_text("FocusScore", str(focus_score))
             
-            img.save(
-                str(path),
+            self._atomic_save(
+                img,
+                path,
                 format="PNG",
                 pnginfo=pnginfo,
-                optimize=True  # Optimize PNG file size
+                optimize=True,
             )
         except (AttributeError, NameError):
             # Fallback for older Pillow versions without proper PNG metadata support
             print("Warning: PNG metadata not supported in this Pillow version, saving without metadata")
-            img.save(
-                str(path),
+            self._atomic_save(
+                img,
+                path,
                 format="PNG",
-                optimize=True
+                optimize=True,
             )
 
 
@@ -617,6 +671,6 @@ if __name__ == "__main__":
             downsample=not args.no_downsample,
             convert_8bit=not args.no_8bit
         )
-        files, scores, _ = conv.convert(args.movie, args.stub)
+        files, scores = conv.convert(args.movie, args.stub)
         for fp, sc in zip(files, scores):
             print(f"{fp.name}\tfocus={sc:.1f}")
